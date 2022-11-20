@@ -1,0 +1,2 @@
+gym[classic_control]<0.26.0
+git+https://github.com/carlosluis/stable-baselines3@75fd27e019aaf4dad612823b4544620df2c47844
