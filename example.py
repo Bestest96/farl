@@ -1,11 +1,32 @@
 import gym
 from stable_baselines3 import DQN
 from farl import FARL
+import numpy as np
+
+
+from gym import ObservationWrapper
+
+
+class CustomCartPoleEnv(ObservationWrapper):
+    def observation(self, observation):
+        observation[0] /= 4.8
+        observation[1] = 1 / (1 + np.exp(-observation[1])) - 0.5
+        observation[3] = 1 / (1 + np.exp(-observation[3])) - 0.5
+        return observation
+
+
+class CustomMountainCarEnv(ObservationWrapper):
+    def observation(self, observation):
+        observation[0] = 1 / (1 + np.exp(-observation[0])) - 0.5
+        observation[1] = 1 / (1 + np.exp(-observation[1])) - 0.5
+        return observation
 
 
 def main():
-    env = gym.make('CartPole-v1')
     # env = gym.make('MountainCar-v0')
+    env = gym.make('CartPole-v1')
+    # env = CustomMountainCarEnv(env)
+    env = CustomCartPoleEnv(env)
 
     # dqn = DQN.load('dqn_model', env=env)
     # dqn = DQN('MlpPolicy', env, verbose=1, exploration_initial_eps=0.05)
