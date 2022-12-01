@@ -82,14 +82,17 @@ class FARL:
         # self.h = np.zeros(n)
         self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
 
-    def learn(self, num_episodes: int, log_interval: int = 100):
+    def learn(self, total_timesteps: int, log_interval: int = 100):
         stats = dict(
-            episode_rewards=np.zeros(num_episodes),
-            episode_lengths=np.zeros(num_episodes),
-            episode_0_actions=np.zeros(num_episodes),
+            episode_rewards=[],
+            episode_lengths=[],
         )
-        for i_episode in range(num_episodes):
-            self.exploration_rate = self.exploration_schedule(1 - i_episode / num_episodes)
+        num_timesteps = 0
+        i_episode = 0
+        while num_timesteps < total_timesteps:
+            self.exploration_rate = self.exploration_schedule(1 - num_timesteps / total_timesteps)
+            stats['episode_rewards'].append(0)
+            stats['episode_lengths'].append(0)
 
             state, _ = self.env.reset()
             state = self._multi_discrete_to_onehot(state)
@@ -104,14 +107,15 @@ class FARL:
 
                 stats['episode_rewards'][i_episode] += reward
                 stats['episode_lengths'][i_episode] = t + 1
-                stats['episode_0_actions'][i_episode] += action == 0
 
                 self._update(state, action, reward, new_state, done)
-
                 state = new_state
 
                 if done:
                     break
+
+            num_timesteps += t + 1
+            i_episode += 1
 
             if self.verbose and i_episode % log_interval == 0 and i_episode > 0:
                 log_range = slice(i_episode - log_interval, i_episode)

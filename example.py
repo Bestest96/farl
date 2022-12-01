@@ -49,7 +49,7 @@ def main():
     # dqn.save('dqn_model')
     model = FARL(env, exploration_initial_eps=1, exploration_fraction=0.1, exploration_final_eps=0.05,
                 alpha=1e-3, verbose=True)
-    model.learn(num_episodes=200_000, log_interval=1000)
+    model.learn(total_timesteps=1_000_000, log_interval=1000)
 
     obs, _ = env.reset()
     done = False
