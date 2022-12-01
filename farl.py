@@ -68,10 +68,11 @@ class FARL:
         self.beta = beta
         self.verbose = verbose
 
-        if len(env.observation_space.shape) > 0:
-            self.n_obs = env.observation_space.shape[0]
-        else:
-            self.n_obs = env.observation_space.n
+        if not isinstance(env.observation_space, gym.spaces.MultiDiscrete):
+            raise Exception('This implementation of FARL only supports MultiDiscrete actions')
+
+        self.obs_nvec = env.observation_space.nvec
+        self.n_obs = np.prod(self.obs_nvec)
         self.n_act = env.action_space.n
 
         n = self.n_obs * self.n_act
@@ -91,12 +92,14 @@ class FARL:
             self.exploration_rate = self.exploration_schedule(1 - i_episode / num_episodes)
 
             state, _ = self.env.reset()
+            state = self._multi_discrete_to_onehot(state)
 
             for t in itertools.count():
 
                 action = np.random.choice(self.n_act, p=self._action_proba_distribution(state))
 
                 new_state, reward, terminated, truncated, _ = self.env.step(action)
+                new_state = self._multi_discrete_to_onehot(new_state)
                 done = terminated or truncated
 
                 stats['episode_rewards'][i_episode] += reward
@@ -132,6 +135,12 @@ class FARL:
         q_values_for_state = np.dot(feature_matrix, self.w)
         return q_values_for_state
 
+    def _multi_discrete_to_onehot(self, s) -> np.ndarray:
+        onehot = np.zeros(self.n_obs)
+        idx = sum(e * self.obs_nvec[i] ** i for i, e in enumerate(s))
+        onehot[idx] = 1
+        return onehot
+
     def _update(
             self,
             s: np.ndarray,
@@ -154,6 +163,7 @@ class FARL:
         self.h += self.beta * (delta - np.dot(x, self.h)) * x
 
     def predict(self, observation: np.ndarray, deterministic: bool = False) -> (int, None):
+        observation = self._multi_discrete_to_onehot(observation)
         if deterministic:
             return np.argmax(self._get_q_values(observation)), None
         return np.random.choice(self.n_act, p=self._action_proba_distribution(observation)), None

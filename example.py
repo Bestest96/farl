@@ -12,24 +12,19 @@ class CustomCartPoleEnv(ObservationWrapper):
     def __init__(self, env: Env):
         super().__init__(env)
         self._bins = 8
-        self.observation_space = Box(low=0, high=1, shape=(self._bins ** 4,))
-
-        # n = self.observation_space.shape[0]
-        # self.observation_space = MultiDiscrete([self._bins] * n)
+        n = self.observation_space.shape[0]
+        self.observation_space = MultiDiscrete([self._bins] * n)
 
     @staticmethod
     def _rescale_observation(obs: np.ndarray) -> np.ndarray:
-        obs[0] /= 4.8
+        obs[0] = obs[0] / (4.8 * 2) + 0.5
         obs[1] = 1 / (1 + np.exp(-obs[1]))
+        obs[2] = obs[2] / (0.418 * 2) + 0.5
         obs[3] = 1 / (1 + np.exp(-obs[3]))
         return obs
 
     def _discretize(self, obs: np.ndarray) -> np.ndarray:
-        obs_bins = np.array(list(map(lambda x: int(x * self._bins), obs)))
-        idx = sum(e * self._bins ** i for i, e in enumerate(obs_bins))
-        new_obs = np.zeros(self._bins ** len(obs))
-        new_obs[idx] = 1
-        return new_obs
+        return np.array(list(map(lambda x: int(x * self._bins), obs)))
 
     def observation(self, observation: np.ndarray) -> np.ndarray:
         observation = self._rescale_observation(observation)
