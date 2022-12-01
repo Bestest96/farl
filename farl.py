@@ -2,13 +2,14 @@
 #    https://github.com/rldotai/rl-algorithms/blob/master/py3/gtd.py
 #    https://github.com/dalmia/David-Silver-Reinforcement-learning/blob/master/Week 6 - Value Function Approximations/Q-Learning with Value Function Approximation.py
 #    https://github.com/DLR-RM/stable-baselines3/blob/abffa161982b92e7f4b0186611cb73653bc2553b/stable_baselines3/common/utils.py#L95
-# Modified with accordance to https://www.sciencedirect.com/science/article/pii/S0378779621002108
+# Modified with accordance to
+#    https://www.sciencedirect.com/science/article/pii/S0378779621002108
 
 
 import itertools
 from typing import Callable, Optional
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 
@@ -67,33 +68,42 @@ class FARL:
         self.beta = beta
         self.verbose = verbose
 
-        self.n_obs = env.observation_space.shape[0]
+        if len(env.observation_space.shape) > 0:
+            self.n_obs = env.observation_space.shape[0]
+        else:
+            self.n_obs = env.observation_space.n
         self.n_act = env.action_space.n
 
-        n = self.n_obs + self.n_act
-        self.w = np.zeros(n)
-        self.h = np.zeros(n)
+        n = self.n_obs * self.n_act
+
+        # self.w = np.zeros(n)
+        self.w = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+        # self.h = np.zeros(n)
+        self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
 
     def learn(self, num_episodes: int, log_interval: int = 100):
         stats = dict(
             episode_rewards=np.zeros(num_episodes),
             episode_lengths=np.zeros(num_episodes),
+            episode_0_actions=np.zeros(num_episodes),
         )
         for i_episode in range(num_episodes):
             self.exploration_rate = self.exploration_schedule(1 - i_episode / num_episodes)
 
-            state = self.env.reset()
+            state, _ = self.env.reset()
 
             for t in itertools.count():
 
                 action = np.random.choice(self.n_act, p=self._action_proba_distribution(state))
 
-                new_state, reward, done, *_ = self.env.step(action)
+                new_state, reward, terminated, truncated, _ = self.env.step(action)
+                done = terminated or truncated
 
                 stats['episode_rewards'][i_episode] += reward
-                stats['episode_lengths'][i_episode] = t
+                stats['episode_lengths'][i_episode] = t + 1
+                stats['episode_0_actions'][i_episode] += action == 0
 
-                self._update(state, action, reward, new_state)
+                self._update(state, action, reward, new_state, done)
 
                 state = new_state
 
@@ -101,10 +111,12 @@ class FARL:
                     break
 
             if self.verbose and i_episode % log_interval == 0 and i_episode > 0:
+                log_range = slice(i_episode - log_interval, i_episode)
+                avg_length = np.average(stats["episode_lengths"][log_range])
                 print(f'Episode {i_episode}: '
-                      f'avg reward = {np.average(stats["episode_rewards"][i_episode - log_interval:i_episode])}, '
-                      f'avg length = {np.average(stats["episode_lengths"][i_episode - log_interval:i_episode])}, '
-                      f'eps = {round(self.exploration_rate, 2)}')
+                      f'avg reward = {np.average(stats["episode_rewards"][log_range])}, '
+                      f'avg length = {avg_length}, '
+                      f'eps = {round(self.exploration_rate, 4)}')
 
     def _action_proba_distribution(self, obs: np.ndarray) -> np.ndarray:
         p = np.ones(self.n_act, dtype=float) * self.exploration_rate / self.n_act
@@ -114,9 +126,9 @@ class FARL:
         return p
 
     def _get_q_values(self, state: np.ndarray) -> np.ndarray:
-        feature_matrix = np.zeros((self.n_act, self.n_act + self.n_obs), float)
-        feature_matrix[:, :self.n_obs] = state
-        feature_matrix[:, self.n_obs:] = np.identity(self.n_act)
+        feature_matrix = np.zeros((self.n_act, self.n_obs * self.n_act), float)
+        for a in range(self.n_act):
+            feature_matrix[a, a * self.n_obs: (a + 1) * self.n_obs] = state
         q_values_for_state = np.dot(feature_matrix, self.w)
         return q_values_for_state
 
@@ -125,19 +137,23 @@ class FARL:
             s: np.ndarray,
             a: int,
             r: float,
-            sp: np.ndarray
+            sp: np.ndarray,
+            done: bool,
     ):
-        a_onehot, a_max_onehot = np.zeros(self.n_act), np.zeros(self.n_act)
-        a_onehot[a] = 1
-        a_max_onehot[np.argmax(self._get_q_values(sp))] = 1
-        x, max_xp = np.concatenate([s, a_onehot]), np.concatenate([sp, a_max_onehot])
+        x, max_xp = np.zeros(self.n_obs * self.n_act), np.zeros(self.n_obs * self.n_act)
+        x[a * self.n_obs:(a + 1) * self.n_obs] = s
+        a_max = np.argmax(self._get_q_values(sp))
+        max_xp[a_max * self.n_obs:(a_max + 1) * self.n_obs] = sp
 
-        delta = r + self.gamma * np.dot(max_xp, self.w) - np.dot(x, self.w)
-        self.w += self.alpha * (delta * x - self.gamma * np.dot(x, self.h) * max_xp)
+        if not done:
+            delta = r + self.gamma * np.dot(max_xp, self.w) - np.dot(x, self.w)
+            self.w += self.alpha * (delta * x - self.gamma * np.dot(x, self.h) * max_xp)
+        else:
+            delta = r - np.dot(x, self.w)
+            self.w += self.alpha * delta * x
         self.h += self.beta * (delta - np.dot(x, self.h)) * x
 
     def predict(self, observation: np.ndarray, deterministic: bool = False) -> (int, None):
-        q_values = self._get_q_values(observation)
         if deterministic:
-            return np.argmax(q_values), None
+            return np.argmax(self._get_q_values(observation)), None
         return np.random.choice(self.n_act, p=self._action_proba_distribution(observation)), None
