@@ -82,7 +82,7 @@ class FARL:
         # self.h = np.zeros(n)
         self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
 
-    def learn(self, total_timesteps: int, log_interval: int = 100):
+    def learn(self, total_timesteps: int, log_interval: int = 100, log_path: Optional[str] = None):
         stats = dict(
             episode_rewards=[],
             episode_lengths=[],
@@ -120,10 +120,15 @@ class FARL:
             if self.verbose and i_episode % log_interval == 0 and i_episode > 0:
                 log_range = slice(i_episode - log_interval, i_episode)
                 avg_length = np.average(stats["episode_lengths"][log_range])
-                print(f'Episode {i_episode}: '
-                      f'avg reward = {np.average(stats["episode_rewards"][log_range])}, '
-                      f'avg length = {avg_length}, '
-                      f'eps = {round(self.exploration_rate, 4)}')
+                logs = f'Episode {i_episode}, ' \
+                       f'total_timesteps {num_timesteps}, ' \
+                       f'avg_reward {np.average(stats["episode_rewards"][log_range])}, ' \
+                       f'avg_length {avg_length}, ' \
+                       f'eps {round(self.exploration_rate, 4)}'
+                print(logs)
+                if log_path:
+                    with open(log_path, 'a') as f:
+                        f.write(logs + '\n')
 
     def _action_proba_distribution(self, obs: np.ndarray) -> np.ndarray:
         p = np.ones(self.n_act, dtype=float) * self.exploration_rate / self.n_act
