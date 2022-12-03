@@ -1,11 +1,12 @@
 import sys
+
+import numpy as np
 from gymnasium import ObservationWrapper, Env
 from gymnasium.spaces import Box, MultiDiscrete
 import gymnasium as gym
 sys.modules["gym"] = gym
 from stable_baselines3 import DQN
-from farl import FARL
-import numpy as np
+from farl.farl import FARL
 
 
 class CustomCartPoleEnv(ObservationWrapper):
