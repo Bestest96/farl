@@ -7,6 +7,7 @@
 
 
 import itertools
+from functools import reduce
 from typing import Callable, Optional
 
 import gymnasium as gym
@@ -146,7 +147,7 @@ class FARL:
 
     def _multi_discrete_to_onehot(self, s) -> np.ndarray:
         onehot = np.zeros(self.n_obs)
-        idx = sum(e * self.obs_nvec[i] ** i for i, e in enumerate(s))
+        idx = reduce(lambda acc, t: acc * self.obs_nvec[t[0]] + t[1], list(enumerate(s))[1:], s[0])
         onehot[idx] = 1
         return onehot
 
