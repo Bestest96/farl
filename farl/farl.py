@@ -49,10 +49,14 @@ class FARL:
             exploration_final_eps: float = 0.05,
             exploration_fraction: float = 0.1,
             gamma: float = 0.9,
-            alpha: float = 1e-7,
+            alpha: float = 1e-5,
             beta: Optional[float] = None,
             verbose: bool = False,
+            feature_representation: str = 'fsr',
     ):
+        if not isinstance(env.observation_space, gym.spaces.MultiDiscrete):
+            raise Exception('This implementation of FARL only supports MultiDiscrete actions')
+
         self.env = env
 
         self.exploration_schedule = get_linear_fn(
@@ -68,12 +72,16 @@ class FARL:
             beta = alpha / 100
         self.beta = beta
         self.verbose = verbose
-
-        if not isinstance(env.observation_space, gym.spaces.MultiDiscrete):
-            raise Exception('This implementation of FARL only supports MultiDiscrete actions')
+        if feature_representation not in ['fsr', 'tabular']:
+            raise RuntimeError(f'Unknown feature representation {feature_representation}.'
+                               f'Only "fsr" (fixed sparse representation) and "tabular" are supported.')
+        self.feature_representation = feature_representation
 
         self.obs_nvec = env.observation_space.nvec
-        self.n_obs = np.prod(self.obs_nvec)
+        if feature_representation == 'fsr':
+            self.n_obs = sum(self.obs_nvec)
+        else:  # tabular
+            self.n_obs = np.prod(self.obs_nvec)
         self.n_act = env.action_space.n
 
         n = self.n_obs * self.n_act
@@ -82,6 +90,12 @@ class FARL:
         self.w = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
         # self.h = np.zeros(n)
         self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+
+    def _extract_features(self, s: np.ndarray) -> np.ndarray:
+        if self.feature_representation == 'fsr':
+            return self._multi_discrete_to_binary(s)
+        # tabular
+        return self._multi_discrete_to_onehot(s)
 
     def learn(self, total_timesteps: int, log_interval: int = 100, log_path: Optional[str] = None):
         stats = dict(
@@ -96,14 +110,14 @@ class FARL:
             stats['episode_lengths'].append(0)
 
             state, _ = self.env.reset()
-            state = self._multi_discrete_to_onehot(state)
+            state = self._extract_features(state)
 
             for t in itertools.count():
 
                 action = np.random.choice(self.n_act, p=self._action_proba_distribution(state))
 
                 new_state, reward, terminated, truncated, _ = self.env.step(action)
-                new_state = self._multi_discrete_to_onehot(new_state)
+                new_state = self._extract_features(new_state)
                 done = terminated or truncated
 
                 stats['episode_rewards'][i_episode] += reward
@@ -151,6 +165,14 @@ class FARL:
         onehot[idx] = 1
         return onehot
 
+    def _multi_discrete_to_binary(self, s) -> np.ndarray:
+        binary = np.zeros(self.n_obs)
+        idx = 0
+        for n_i, s_i in zip(self.obs_nvec, s):
+            binary[idx + s_i] = 1
+            idx += n_i
+        return binary
+
     def _update(
             self,
             s: np.ndarray,
@@ -173,7 +195,7 @@ class FARL:
         self.h += self.beta * (delta - np.dot(x, self.h)) * x
 
     def predict(self, observation: np.ndarray, deterministic: bool = False) -> (int, None):
-        observation = self._multi_discrete_to_onehot(observation)
+        observation = self._extract_features(observation)
         if deterministic:
             return np.argmax(self._get_q_values(observation)), None
         return np.random.choice(self.n_act, p=self._action_proba_distribution(observation)), None
