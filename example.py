@@ -2,9 +2,10 @@ import sys
 
 import numpy as np
 from gymnasium import ObservationWrapper, Env
-from gymnasium.spaces import Box, MultiDiscrete
+from gymnasium.spaces import MultiDiscrete
 import gymnasium as gym
 sys.modules["gym"] = gym
+from stable_baselines3.common import logger
 from stable_baselines3 import DQN
 from farl.farl import FARL
 
@@ -12,7 +13,7 @@ from farl.farl import FARL
 class CustomCartPoleEnv(ObservationWrapper):
     def __init__(self, env: Env):
         super().__init__(env)
-        self._bins = 8
+        self._bins = 10
         n = self.observation_space.shape[0]
         self.observation_space = MultiDiscrete([self._bins] * n)
 
@@ -25,12 +26,12 @@ class CustomCartPoleEnv(ObservationWrapper):
         return obs
 
     def _discretize(self, obs: np.ndarray) -> np.ndarray:
-        return np.array(list(map(lambda x: int(x * self._bins), obs)))
+        return np.array(list(map(lambda t: int(t[1] * self.observation_space.nvec[t[0]]), enumerate(obs))))
 
     def observation(self, observation: np.ndarray) -> np.ndarray:
-        observation = self._rescale_observation(observation)
-        observation = self._discretize(observation)
-        return observation
+        rescaled = self._rescale_observation(observation)
+        discretized = self._discretize(rescaled)
+        return discretized
 
     def step(self, action):
         obs, reward, terminated, truncated, info = super(CustomCartPoleEnv, self).step(action)
@@ -44,25 +45,38 @@ def main():
         gym.make('CartPole-v1')
     )
 
-    # dqn = DQN.load('dqn_model', env=env)
-    # model = DQN('MlpPolicy', env, verbose=1, exploration_initial_eps=1, exploration_fraction=0.1)
-    # model.learn(total_timesteps=1_000_000, log_interval=1000)
-    # dqn.save('dqn_model')
-    model = FARL(env, exploration_initial_eps=1, exploration_fraction=0.1, exploration_final_eps=0.05,
-                alpha=1e-3, verbose=True)
-    model.learn(total_timesteps=1_000_000, log_interval=1000)
+    model = DQN(
+        policy='MlpPolicy',
+        env=env,
+        buffer_size=1,
+        learning_starts=1,
+        batch_size=1,
+        gamma=0.99,
+        train_freq=1,
+        gradient_steps=1,
+        target_update_interval=1,
+        verbose=1,
+    )
+    dqn_logger = logger.configure('.', ['stdout', 'json'])
+    model.set_logger(dqn_logger)
+    # model = FARL(env, exploration_initial_eps=1, exploration_fraction=0.1, exploration_final_eps=0.05,
+    #              alpha=1e-5, gamma=0.99, verbose=True)
+    # model.learn(total_timesteps=10_000_000, log_interval=1000, log_path='farl_progress.txt')
+    model.learn(total_timesteps=10_000_000, log_interval=100)
 
-    obs, _ = env.reset()
-    done = False
-    ret = 0
-    while not done:
-        action, _ = model.predict(observation=obs, deterministic=True)
-        obs, reward, terminated, truncated, _ = env.step(action)
-        done = terminated or truncated
-        ret += reward
-        print(done, action)
-        env.render()
-    print(f'Return: {ret}')
+    eps = 10
+    ret_sum = 0
+    for _ in range(eps):
+        obs, _ = env.reset()
+        done = False
+        ret = 0
+        while not done:
+            action, _ = model.predict(observation=obs, deterministic=True)
+            obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            ret += reward
+        ret_sum += ret
+    print(f'Return avg: {ret_sum / eps}')
 
 
 if __name__ == '__main__':
