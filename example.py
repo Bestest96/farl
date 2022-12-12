@@ -40,9 +40,35 @@ class CustomCartPoleEnv(ObservationWrapper):
         return obs, reward, terminated, truncated, info
 
 
+class CustomCliffWalkingEnv(ObservationWrapper):
+    def __init__(self, env: Env):
+        super().__init__(env)
+        self.observation_space = MultiDiscrete([self.observation_space.n])
+        self.steps_performed = 0
+
+    def observation(self, observation: int) -> np.ndarray:
+        return np.array([observation])
+
+    def reset(self, **kwargs):
+        self.steps_performed = 0
+        return super(CustomCliffWalkingEnv, self).reset(**kwargs)
+
+    def step(self, action):
+        self.steps_performed += 1
+
+        obs, rew, terminated, truncated, info = super(CustomCliffWalkingEnv, self).step(action)
+        if self.steps_performed >= 100_000:
+            truncated = True
+            rew = -100
+        return obs, rew, terminated, truncated, info
+
+
 def main():
-    env = CustomCartPoleEnv(
-        gym.make('CartPole-v1')
+    # env = CustomCartPoleEnv(
+    #     gym.make('CartPole-v1')
+    # )
+    env = CustomCliffWalkingEnv(
+        gym.make("CliffWalking-v0")
     )
 
     model = DQN(
