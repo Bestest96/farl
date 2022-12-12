@@ -84,12 +84,13 @@ class FARL:
             self.n_obs = np.prod(self.obs_nvec)
         self.n_act = env.action_space.n
 
-        n = self.n_obs * self.n_act
-
-        # self.w = np.zeros(n)
+        n = self.n_obs * self.n_act + 1
         self.w = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
-        # self.h = np.zeros(n)
         self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+
+        # bias
+        self.w[-1] = 0
+        self.h[-1] = 0
 
     def _extract_features(self, s: np.ndarray) -> np.ndarray:
         if self.feature_representation == 'fsr':
@@ -153,9 +154,10 @@ class FARL:
         return p
 
     def _get_q_values(self, state: np.ndarray) -> np.ndarray:
-        feature_matrix = np.zeros((self.n_act, self.n_obs * self.n_act), float)
+        feature_matrix = np.zeros((self.n_act, self.n_obs * self.n_act + 1), float)
         for a in range(self.n_act):
             feature_matrix[a, a * self.n_obs: (a + 1) * self.n_obs] = state
+        feature_matrix[:, -1] = 1  # bias
         q_values_for_state = np.dot(feature_matrix, self.w)
         return q_values_for_state
 
@@ -181,7 +183,7 @@ class FARL:
             sp: np.ndarray,
             done: bool,
     ):
-        x, max_xp = np.zeros(self.n_obs * self.n_act), np.zeros(self.n_obs * self.n_act)
+        x, max_xp = np.zeros(self.n_obs * self.n_act + 1), np.zeros(self.n_obs * self.n_act + 1)
         x[a * self.n_obs:(a + 1) * self.n_obs] = s
         a_max = np.argmax(self._get_q_values(sp))
         max_xp[a_max * self.n_obs:(a_max + 1) * self.n_obs] = sp
