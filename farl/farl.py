@@ -9,6 +9,7 @@
 import itertools
 from functools import reduce
 from typing import Callable, Optional
+import pickle
 
 import gymnasium as gym
 import numpy as np
@@ -41,6 +42,19 @@ def get_linear_fn(start: float, end: float, end_fraction: float) -> Schedule:
     return func
 
 
+def get_eps_schedule(start: float, mid: float, mid_fraction: float) -> Schedule:
+    explore_schedule = get_linear_fn(start, 2 * mid, mid_fraction)
+    decay_schedule = get_linear_fn(2 * mid, 1e-6, 1 - mid_fraction)
+
+    def func(progress_remaining: float) -> float:
+        if (1 - progress_remaining) > mid_fraction:
+            return decay_schedule(progress_remaining + mid_fraction)
+        else:
+            return explore_schedule(progress_remaining)
+
+    return func
+
+
 class FARL:
     def __init__(
             self,
@@ -59,6 +73,7 @@ class FARL:
 
         self.env = env
 
+        # self.exploration_schedule = get_eps_schedule(
         self.exploration_schedule = get_linear_fn(
             exploration_initial_eps,
             exploration_final_eps,
@@ -201,3 +216,24 @@ class FARL:
         if deterministic:
             return np.argmax(self._get_q_values(observation)), None
         return np.random.choice(self.n_act, p=self._action_proba_distribution(observation)), None
+
+    def save(self, path: str):
+        dct = self.__dict__
+        # sometimes can't pickle env
+        del dct['env']
+        # can't pickle local function
+        del dct['exploration_schedule']
+        with open(path, 'wb') as f:
+            pickle.dump(dct, f)
+
+    @classmethod
+    def load(cls, path: str, env) -> 'FARL':
+        with open(path, 'rb') as f:
+            dct = pickle.load(f)
+        obj = FARL(env)
+        dct.update(dict(
+            env=env,
+            exploration_schedule=obj.__dict__['exploration_schedule'],
+        ))
+        obj.__dict__ = dct
+        return obj
