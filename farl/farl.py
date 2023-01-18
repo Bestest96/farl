@@ -10,6 +10,7 @@ import itertools
 from functools import reduce
 from typing import Callable, Optional
 import pickle
+import random
 
 import gymnasium as gym
 import numpy as np
@@ -139,7 +140,11 @@ class FARL:
 
             for t in itertools.count():
 
-                action = torch.multinomial(self._action_proba_distribution(state), 1)
+                # action = torch.multinomial(self._action_proba_distribution(state), 1)
+                if random.random() < self.exploration_rate:
+                    action = torch.randint(low=0, high=self.n_act, size=(1,))
+                else:
+                    action = torch.argmax(self._get_q_values(state))
 
                 new_state, reward, terminated, truncated, _ = self.env.step(action.item())
                 new_state = self._extract_features(torch.from_numpy(new_state).to(self.device))
@@ -248,7 +253,7 @@ class FARL:
         observation = self._extract_features(observation)
         if deterministic:
             return torch.argmax(self._get_q_values(observation)), None
-        return torch.multinomial(self._action_proba_distribution(observation), 1), None
+        return torch.randint(low=0, high=self.n_act, size=(1,)), None
 
     def save(self, path: str):
         dct = self.__dict__.copy()
