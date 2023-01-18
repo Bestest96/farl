@@ -13,7 +13,7 @@ import pickle
 
 import gymnasium as gym
 import numpy as np
-
+import torch
 
 Schedule = Callable[[float], float]
 
@@ -59,6 +59,7 @@ class FARL:
     def __init__(
             self,
             env: gym.Env,
+            eval_env: gym.Env,
             exploration_initial_eps: float = 1.0,
             exploration_final_eps: float = 0.05,
             exploration_fraction: float = 0.1,
@@ -72,6 +73,8 @@ class FARL:
             raise Exception('This implementation of FARL only supports MultiDiscrete actions')
 
         self.env = env
+        self.eval_env = eval_env
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
         # self.exploration_schedule = get_eps_schedule(
         self.exploration_schedule = get_linear_fn(
@@ -100,40 +103,46 @@ class FARL:
         self.n_act = env.action_space.n
 
         n = self.n_obs * self.n_act + 1
-        self.w = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
-        self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+        # self.w = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+        # self.h = np.random.uniform(low=-1/np.sqrt(n), high=1/np.sqrt(n), size=(n,))
+        high = 1/np.sqrt(n)
+        low = -1/np.sqrt(n)
+        self.w = (high - low) * torch.rand(size=(n,), device=self.device) + low
+        self.h = (high - low) * torch.rand(size=(n,), device=self.device) + low
 
         # bias
         self.w[-1] = 0
         self.h[-1] = 0
 
-    def _extract_features(self, s: np.ndarray) -> np.ndarray:
+    def _extract_features(self, s: torch.Tensor) -> torch.Tensor:
         if self.feature_representation == 'fsr':
             return self._multi_discrete_to_binary(s)
         # tabular
         return self._multi_discrete_to_onehot(s)
 
-    def learn(self, total_timesteps: int, log_interval: int = 100, log_path: Optional[str] = None):
+    def learn(self, total_timesteps: int, log_interval: int = 100, save_path: Optional[str] = None, log_path: Optional[str] = None, seed: Optional[int] = None):
         stats = dict(
             episode_rewards=[],
             episode_lengths=[],
+            eval_rewards=[]
         )
         num_timesteps = 0
         i_episode = 0
+        best_eval_reward = -np.inf
         while num_timesteps < total_timesteps:
             self.exploration_rate = self.exploration_schedule(1 - num_timesteps / total_timesteps)
             stats['episode_rewards'].append(0)
             stats['episode_lengths'].append(0)
 
             state, _ = self.env.reset()
-            state = self._extract_features(state)
+            state = self._extract_features(torch.from_numpy(state).to(self.device))
 
             for t in itertools.count():
 
-                action = np.random.choice(self.n_act, p=self._action_proba_distribution(state))
+                action = torch.multinomial(self._action_proba_distribution(state), 1)
 
-                new_state, reward, terminated, truncated, _ = self.env.step(action)
-                new_state = self._extract_features(new_state)
+                new_state, reward, terminated, truncated, _ = self.env.step(action.item())
+                new_state = self._extract_features(torch.from_numpy(new_state).to(self.device))
                 done = terminated or truncated
 
                 stats['episode_rewards'][i_episode] += reward
@@ -149,41 +158,65 @@ class FARL:
             i_episode += 1
 
             if self.verbose and i_episode % log_interval == 0 and i_episode > 0:
+                state, _ = self.eval_env.reset(seed=seed)
+                state = self._extract_features(torch.from_numpy(state).to(self.device))
+                stats["eval_rewards"].append(0.0)
+
+                for t in itertools.count():
+
+                    action = torch.argmax(self._get_q_values(state))
+
+                    new_state, reward, terminated, truncated, _ = self.eval_env.step(action.item())
+                    new_state = self._extract_features(torch.from_numpy(new_state).to(self.device))
+                    done = terminated or truncated
+
+                    stats["eval_rewards"][-1] += reward
+
+                    state = new_state
+
+                    if done:
+                        break
+
+                if stats["eval_rewards"][-1] > best_eval_reward:
+                    best_eval_reward = stats["eval_rewards"][-1]
+                    self.save(f"{save_path}/farl_best.zip")
+
                 log_range = slice(i_episode - log_interval, i_episode)
                 avg_length = np.average(stats["episode_lengths"][log_range])
                 logs = f'Episode {i_episode}, ' \
                        f'total_timesteps {num_timesteps}, ' \
-                       f'avg_reward {np.average(stats["episode_rewards"][log_range])}, ' \
+                       f'avg_train_reward {np.average(stats["episode_rewards"][log_range])}, ' \
                        f'avg_length {avg_length}, ' \
-                       f'eps {round(self.exploration_rate, 4)}'
+                       f'eps {round(self.exploration_rate, 4)} ' \
+                       f'best_eval_reward {best_eval_reward}'
                 print(logs)
                 if log_path:
                     with open(log_path, 'a') as f:
                         f.write(logs + '\n')
 
-    def _action_proba_distribution(self, obs: np.ndarray) -> np.ndarray:
-        p = np.ones(self.n_act, dtype=float) * self.exploration_rate / self.n_act
+    def _action_proba_distribution(self, obs: torch.Tensor) -> torch.Tensor:
+        p = torch.ones(self.n_act, device=self.device) * self.exploration_rate / self.n_act
         q_values = self._get_q_values(obs)
-        best_action = np.argmax(q_values)
+        best_action = torch.argmax(q_values)
         p[best_action] += (1.0 - self.exploration_rate)
         return p
 
-    def _get_q_values(self, state: np.ndarray) -> np.ndarray:
-        feature_matrix = np.zeros((self.n_act, self.n_obs * self.n_act + 1), float)
+    def _get_q_values(self, state: torch.Tensor) -> torch.Tensor:
+        feature_matrix = torch.zeros((self.n_act, self.n_obs * self.n_act + 1), device=self.device)
         for a in range(self.n_act):
             feature_matrix[a, a * self.n_obs: (a + 1) * self.n_obs] = state
         feature_matrix[:, -1] = 1  # bias
-        q_values_for_state = np.dot(feature_matrix, self.w)
+        q_values_for_state = torch.matmul(feature_matrix, self.w)
         return q_values_for_state
 
-    def _multi_discrete_to_onehot(self, s) -> np.ndarray:
-        onehot = np.zeros(self.n_obs)
+    def _multi_discrete_to_onehot(self, s: torch.Tensor) -> torch.Tensor:
+        onehot = torch.zeros(self.n_obs, device=self.device)
         idx = reduce(lambda acc, t: acc * self.obs_nvec[t[0]] + t[1], list(enumerate(s))[1:], s[0])
         onehot[idx] = 1
         return onehot
 
-    def _multi_discrete_to_binary(self, s) -> np.ndarray:
-        binary = np.zeros(self.n_obs)
+    def _multi_discrete_to_binary(self, s) -> torch.Tensor:
+        binary = torch.zeros(self.n_obs, device=self.device)
         idx = 0
         for n_i, s_i in zip(self.obs_nvec, s):
             binary[idx + s_i] = 1
@@ -192,47 +225,49 @@ class FARL:
 
     def _update(
             self,
-            s: np.ndarray,
+            s: torch.Tensor,
             a: int,
             r: float,
-            sp: np.ndarray,
+            sp: torch.Tensor,
             done: bool,
     ):
-        x, max_xp = np.zeros(self.n_obs * self.n_act + 1), np.zeros(self.n_obs * self.n_act + 1)
+        x, max_xp = torch.zeros(self.n_obs * self.n_act + 1, device=self.device), torch.zeros(self.n_obs * self.n_act + 1, device=self.device)
         x[a * self.n_obs:(a + 1) * self.n_obs] = s
-        a_max = np.argmax(self._get_q_values(sp))
+        a_max = torch.argmax(self._get_q_values(sp))
         max_xp[a_max * self.n_obs:(a_max + 1) * self.n_obs] = sp
 
         if not done:
-            delta = r + self.gamma * np.dot(max_xp, self.w) - np.dot(x, self.w)
-            self.w += self.alpha * (delta * x - self.gamma * np.dot(x, self.h) * max_xp)
+            delta = r + self.gamma * torch.dot(max_xp, self.w) - torch.dot(x, self.w)
+            self.w += self.alpha * (delta * x - self.gamma * torch.dot(x, self.h) * max_xp)
         else:
-            delta = r - np.dot(x, self.w)
+            delta = r - torch.dot(x, self.w)
             self.w += self.alpha * delta * x
-        self.h += self.beta * (delta - np.dot(x, self.h)) * x
+        self.h += self.beta * (delta - torch.dot(x, self.h)) * x
 
-    def predict(self, observation: np.ndarray, deterministic: bool = False) -> (int, None):
+    def predict(self, observation: torch.Tensor, deterministic: bool = False) -> (int, None):
         observation = self._extract_features(observation)
         if deterministic:
-            return np.argmax(self._get_q_values(observation)), None
-        return np.random.choice(self.n_act, p=self._action_proba_distribution(observation)), None
+            return torch.argmax(self._get_q_values(observation)), None
+        return torch.multinomial(self._action_proba_distribution(observation), 1), None
 
     def save(self, path: str):
-        dct = self.__dict__
+        dct = self.__dict__.copy()
         # sometimes can't pickle env
         del dct['env']
+        del dct['eval_env']
         # can't pickle local function
         del dct['exploration_schedule']
         with open(path, 'wb') as f:
             pickle.dump(dct, f)
 
     @classmethod
-    def load(cls, path: str, env) -> 'FARL':
+    def load(cls, path: str, env, eval_env = None) -> 'FARL':
         with open(path, 'rb') as f:
             dct = pickle.load(f)
-        obj = FARL(env)
+        obj = FARL(env, eval_env)
         dct.update(dict(
             env=env,
+            eval_env=eval_env,
             exploration_schedule=obj.__dict__['exploration_schedule'],
         ))
         obj.__dict__ = dct
